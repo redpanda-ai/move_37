@@ -1,12 +1,12 @@
-import gym
+# import gym
 import numpy as np
 import tensorflow as tf
 import argparse
-import itertools
+# import itertools
 import time
 import os
-import pickle
-import code
+# import pickle
+# import code
 import random
 
 from ddpg import Actor, Critic
@@ -125,7 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--env', default='simple_tag_guided', type=str)
     parser.add_argument('--video_dir', default='videos/', type=str)
     parser.add_argument('--learning_rate', default=0.001, type=float)
-    parser.add_argument('--episodes', default=100000, type=int)
+    parser.add_argument('--episodes', default=1000, type=int)
     parser.add_argument('--video_interval', default=1000, type=int)
     parser.add_argument('--render', default=False, action="store_true")
     parser.add_argument('--benchmark', default=False, action="store_true")

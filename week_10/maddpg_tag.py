@@ -1,14 +1,10 @@
-import gym
+
 import numpy as np
-import tensorflow as tf
 import argparse
-import itertools
+
 import time
-import os
-import pickle
-import code
+import tensorflow as tf
 import random
-from functools import reduce
 
 from maddpg import Actor, Critic
 from memory import Memory
@@ -17,9 +13,10 @@ from make_env import make_env
 import general_utilities
 import simple_tag_utilities
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-def play(episodes, is_render, is_testing, checkpoint_interval,
-         weights_filename_prefix, csv_filename_prefix, batch_size):
+def play(checkpoint_interval, weights_filename_prefix, csv_filename_prefix, batch_size):
     # init statistics. NOTE: simple tag specific!
     statistics_header = ["episode"]
     statistics_header.append("steps")
@@ -121,7 +118,8 @@ def play(episodes, is_render, is_testing, checkpoint_interval,
     return statistics
 
 
-if __name__ == '__main__':
+def get_args():
+    """Argparse stuff here"""
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', default='simple_tag_guided', type=str)
     parser.add_argument('--video_dir', default='videos/', type=str)
@@ -156,15 +154,11 @@ if __name__ == '__main__':
     parser.add_argument('--ou_x0', nargs='+', type=float,
                         help="OrnsteinUhlenbeckActionNoise x0 for each agent")
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    general_utilities.dump_dict_as_json(vars(args),
-                                        args.experiment_prefix + "/save/run_parameters.json")
 
-    # init env
-    env = make_env(args.env, args.benchmark)
-
-    # Extract ou initialization values
+def get_ou_mus(args, env):
+    """A doc-string"""
     if args.ou_mus is not None:
         if len(args.ou_mus) == sum([env.action_space[i].n for i in range(env.n)]):
             ou_mus = []
@@ -179,7 +173,11 @@ if __name__ == '__main__':
                 "Must have enough ou_mus for all actions for all agents")
     else:
         ou_mus = [np.zeros(env.action_space[i].n) for i in range(env.n)]
+    return ou_mus
 
+
+def get_ou_sigma(args, env):
+    """A doc-string"""
     if args.ou_sigma is not None:
         if len(args.ou_sigma) == env.n:
             ou_sigma = args.ou_sigma
@@ -187,7 +185,11 @@ if __name__ == '__main__':
             raise ValueError("Must have enough ou_sigma for all agents")
     else:
         ou_sigma = [0.3 for i in range(env.n)]
+    return ou_sigma
 
+
+def get_ou_theta(args, env):
+    """A doc-string"""
     if args.ou_theta is not None:
         if len(args.ou_theta) == env.n:
             ou_theta = args.ou_theta
@@ -195,7 +197,11 @@ if __name__ == '__main__':
             raise ValueError("Must have enough ou_theta for all agents")
     else:
         ou_theta = [0.15 for i in range(env.n)]
+    return ou_theta
 
+
+def get_ou_dt(args, env):
+    """A doc-string"""
     if args.ou_dt is not None:
         if len(args.ou_dt) == env.n:
             ou_dt = args.ou_dt
@@ -203,7 +209,11 @@ if __name__ == '__main__':
             raise ValueError("Must have enough ou_dt for all agents")
     else:
         ou_dt = [1e-2 for i in range(env.n)]
+    return ou_dt
 
+
+def get_ou_x0(args, env):
+    """A doc-string"""
     if args.ou_x0 is not None:
         if len(args.ou_x0) == env.n:
             ou_x0 = args.ou_x0
@@ -211,6 +221,24 @@ if __name__ == '__main__':
             raise ValueError("Must have enough ou_x0 for all agents")
     else:
         ou_x0 = [None for i in range(env.n)]
+    return ou_x0
+
+
+if __name__ == '__main__':
+    """The main function"""
+    args = get_args()
+    general_utilities.dump_dict_as_json(vars(args),
+                                        args.experiment_prefix + "/save/run_parameters.json")
+
+    # init env
+    env = make_env(args.env, args.benchmark)
+
+    # Extract ou initialization values
+    ou_mus = get_ou_mus(args, env)
+    ou_sigma = get_ou_sigma(args, env)
+    ou_theta = get_ou_theta(args, env)
+    ou_dt = get_ou_dt(args, env)
+    ou_x0 = get_ou_x0(args, env)
 
     # set random seed
     env.seed(args.random_seed)
@@ -273,8 +301,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     # play
-    statistics = play(args.episodes, args.render, args.testing,
-                      args.checkpoint_frequency,
+    statistics = play(args.checkpoint_frequency,
                       args.experiment_prefix + args.weights_filename_prefix,
                       args.experiment_prefix + args.csv_filename_prefix,
                       args.batch_size)
