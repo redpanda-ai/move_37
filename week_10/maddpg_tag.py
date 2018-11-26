@@ -1,37 +1,75 @@
+import argparse
+import general_utilities
+import os
+import random
+import simple_tag_utilities
+import time
 
 import numpy as np
-import argparse
-
-import time
+import pandas as pd
 import tensorflow as tf
-import random
 
 from maddpg import Actor, Critic
 from memory import Memory
-from ornstein_uhlenbeck import OrnsteinUhlenbeckActionNoise
 from make_env import make_env
-import general_utilities
-import simple_tag_utilities
+from ornstein_uhlenbeck import OrnsteinUhlenbeckActionNoise
 
-import os
+# Prevent Tensorflow C++ logs from flooding the output
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-def play(checkpoint_interval, weights_filename_prefix, csv_filename_prefix, batch_size):
-    # init statistics. NOTE: simple tag specific!
-    statistics_header = ["episode"]
-    statistics_header.append("steps")
-    statistics_header.extend(["reward_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["loss_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["collisions_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["ou_theta_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["ou_mu_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["ou_sigma_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["ou_dt_{}".format(i) for i in range(env.n)])
-    statistics_header.extend(["ou_x0_{}".format(i) for i in range(env.n)])
-    print("Collecting statistics {}:".format(" ".join(statistics_header)))
-    statistics = general_utilities.Time_Series_Statistics_Store(
-        statistics_header)
 
+def get_expanded_list(base_string, n):
+    """Expand a base string into n number of column labels, returned as a list"""
+    return [f"{base_string}_{j}" for j in range(n)]
+
+
+def get_stats_df(args, env):
+    """Create the stats_df pandas dataframe, to hold our statistics"""
+    # create all column labels for the pandas dataframe
+    feature_list = ["episode", "steps"]
+    compressed_features = ["reward", "loss", "collisions", "ou_theta", "ou_mu",
+                           "ou_sigma", "ou_dt", "ou_x0"]
+    for feature in compressed_features:
+        feature_list += get_expanded_list(feature, env.n)
+
+    # initialize the pandas dataframe to all zeros
+    my_tuple = (args.episodes, len(feature_list))
+    np_zeros = np.zeros(my_tuple)
+    empty_df = pd.DataFrame(np_zeros, columns=feature_list)
+
+    # cast episode and step columns to int
+    empty_df[['episode', 'steps']] = empty_df[['episode', 'steps']].astype(int)
+
+    # cast all ou_mu data types to np.ndarrays
+    compressed_features_mu = ["ou_mu"]
+    for mu_feature in compressed_features_mu:
+        mu_list = get_expanded_list(mu_feature, env.n)
+        for label in mu_list:
+            empty_df[[label]] = empty_df[[label]].astype(np.ndarray)
+
+    return empty_df
+
+
+def write_stats_row(env, stats_df, episode, steps, episode_rewards, episode_losses, collision_count):
+    """Write a single row of statistics into the stats_df dataframe"""
+    stats_df.loc[stats_df.index[episode], 'episode'] = episode
+    stats_df.loc[stats_df.index[episode], 'steps'] = steps
+
+    collision_list = collision_count.tolist()
+    mu_list = [str(actors_noise[i].mu.tolist()) for i in range(env.n)]
+    for i in range(env.n):
+        stats_df.loc[stats_df.index[episode], f"reward_{i}"] = episode_rewards[i]
+        stats_df.loc[stats_df.index[episode], f"loss_{i}"] = episode_losses[i]
+        stats_df.loc[stats_df.index[episode], f"collisions_{i}"] = collision_list[i]
+        stats_df.loc[stats_df.index[episode], f"ou_theta_{i}"] = actors_noise[i].theta
+        stats_df.loc[stats_df.index[episode], f"ou_mu_{i}"] = mu_list[i]
+        stats_df.loc[stats_df.index[episode], f"ou_sigma_{i}"] = actors_noise[i].sigma
+        stats_df.loc[stats_df.index[episode], f"ou_dt_{i}"] = actors_noise[i].dt
+        stats_df.loc[stats_df.index[episode], f"ou_x0_{i}"] = actors_noise[i].x0
+
+
+def play(checkpoint_interval, weights_filename_prefix, csv_filename_prefix, batch_size, stats_df):
+    """Doc-string here"""
     for episode in range(args.episodes):
         states = env.reset()
         episode_losses = np.zeros(env.n)
@@ -88,34 +126,27 @@ def play(checkpoint_interval, weights_filename_prefix, csv_filename_prefix, batc
                 episode_rewards = episode_rewards / steps
                 episode_losses = episode_losses / steps
 
-                statistic = [episode]
-                statistic.append(steps)
-                statistic.extend([episode_rewards[i] for i in range(env.n)])
-                statistic.extend([episode_losses[i] for i in range(env.n)])
-                statistic.extend(collision_count.tolist())
-                statistic.extend([actors_noise[i].theta for i in range(env.n)])
-                statistic.extend([actors_noise[i].mu for i in range(env.n)])
-                statistic.extend([actors_noise[i].sigma for i in range(env.n)])
-                statistic.extend([actors_noise[i].dt for i in range(env.n)])
-                statistic.extend([actors_noise[i].x0 for i in range(env.n)])
-                statistics.add_statistics(statistic)
+                write_stats_row(env, stats_df, episode, steps, episode_rewards, episode_losses, collision_count)
+
                 if episode % 25 == 0:
-                    print(statistics.summarize_last())
+                    print(stats_df.iloc[episode])
                 break
 
         if episode % checkpoint_interval == 0:
-            statistics.dump("{}_{}.csv".format(
-                csv_filename_prefix, episode))
+            stats_file = f"{csv_filename_prefix}_{episode}.h5"
+            store = pd.HDFStore(stats_file)
+            store['stats_df'] = stats_df
+            print(f"stats_df saved to {stats_file}")
+
             if not os.path.exists(weights_filename_prefix):
                 os.makedirs(weights_filename_prefix)
             save_path = saver.save(session, os.path.join(
                 weights_filename_prefix, "models"), global_step=episode)
-            print("saving model to {}".format(save_path))
-            if episode >= checkpoint_interval:
-                os.remove("{}_{}.csv".format(csv_filename_prefix,
-                                             episode - checkpoint_interval))
 
-    return statistics
+    stats_file = f"{csv_filename_prefix}_{args.episodes}.h5"
+    store = pd.HDFStore(stats_file)
+    store['stats_df'] = stats_df
+    # return statistics
 
 
 def get_args():
@@ -124,6 +155,9 @@ def get_args():
     parser.add_argument('--env', default='simple_tag_guided', type=str)
     parser.add_argument('--video_dir', default='videos/', type=str)
     parser.add_argument('--learning_rate', default=0.001, type=float)
+    parser.add_argument('--good_agents', default=1, type=int)
+    parser.add_argument('--adversaries', default=1, type=int)
+    parser.add_argument('--collision_reward', default=500, type=int)
     parser.add_argument('--episodes', default=100000, type=int)
     parser.add_argument('--video_interval', default=1000, type=int)
     parser.add_argument('--render', default=False, action="store_true")
@@ -176,52 +210,23 @@ def get_ou_mus(args, env):
     return ou_mus
 
 
-def get_ou_sigma(args, env):
+def get_ou_list(args_key, default_val, args, env):
     """A doc-string"""
-    if args.ou_sigma is not None:
-        if len(args.ou_sigma) == env.n:
-            ou_sigma = args.ou_sigma
+    d = vars(args)
+    retval = None
+    if args_key in args:
+        x = getattr(args, args_key)
+        if x is not None:
+            if len(x) == env.n:
+               retval = x
+            else:
+                raise ValueError(f"Must have enough {args_key} for all agents")
         else:
-            raise ValueError("Must have enough ou_sigma for all agents")
+            retval = [default_val for _ in range(env.n)]
     else:
-        ou_sigma = [0.3 for i in range(env.n)]
-    return ou_sigma
+        raise ValueError(f"No such argument: '{args_key}'")
+    return retval
 
-
-def get_ou_theta(args, env):
-    """A doc-string"""
-    if args.ou_theta is not None:
-        if len(args.ou_theta) == env.n:
-            ou_theta = args.ou_theta
-        else:
-            raise ValueError("Must have enough ou_theta for all agents")
-    else:
-        ou_theta = [0.15 for i in range(env.n)]
-    return ou_theta
-
-
-def get_ou_dt(args, env):
-    """A doc-string"""
-    if args.ou_dt is not None:
-        if len(args.ou_dt) == env.n:
-            ou_dt = args.ou_dt
-        else:
-            raise ValueError("Must have enough ou_dt for all agents")
-    else:
-        ou_dt = [1e-2 for i in range(env.n)]
-    return ou_dt
-
-
-def get_ou_x0(args, env):
-    """A doc-string"""
-    if args.ou_x0 is not None:
-        if len(args.ou_x0) == env.n:
-            ou_x0 = args.ou_x0
-        else:
-            raise ValueError("Must have enough ou_x0 for all agents")
-    else:
-        ou_x0 = [None for i in range(env.n)]
-    return ou_x0
 
 
 if __name__ == '__main__':
@@ -231,14 +236,15 @@ if __name__ == '__main__':
                                         args.experiment_prefix + "/save/run_parameters.json")
 
     # init env
-    env = make_env(args.env, args.benchmark)
+    env = make_env(args.env, args.good_agents, args.adversaries, args.collision_reward, args.benchmark)
+    stats_df = get_stats_df(args, env)
 
     # Extract ou initialization values
     ou_mus = get_ou_mus(args, env)
-    ou_sigma = get_ou_sigma(args, env)
-    ou_theta = get_ou_theta(args, env)
-    ou_dt = get_ou_dt(args, env)
-    ou_x0 = get_ou_x0(args, env)
+    ou_sigma = get_ou_list('ou_sigma', 0.3, args, env)
+    ou_theta = get_ou_list('ou_theta', 0.15, args, env)
+    ou_dt = get_ou_list('ou_dt', 1e-2, args, env)
+    ou_x0 = get_ou_list('ou_x0', None, args, env)
 
     # set random seed
     env.seed(args.random_seed)
@@ -301,10 +307,8 @@ if __name__ == '__main__':
     start_time = time.time()
 
     # play
-    statistics = play(args.checkpoint_frequency,
-                      args.experiment_prefix + args.weights_filename_prefix,
-                      args.experiment_prefix + args.csv_filename_prefix,
-                      args.batch_size)
+    play(args.checkpoint_frequency, args.experiment_prefix + args.weights_filename_prefix,
+         args.experiment_prefix + args.csv_filename_prefix, args.batch_size, stats_df)
 
     # bookkeeping
     print("Finished {} episodes in {} seconds".format(args.episodes,
@@ -314,4 +318,3 @@ if __name__ == '__main__':
     save_path = saver.save(session, os.path.join(
         args.experiment_prefix + args.weights_filename_prefix, "models"), global_step=args.episodes)
     print("saving model to {}".format(save_path))
-    statistics.dump(args.experiment_prefix + args.csv_filename_prefix + ".csv")

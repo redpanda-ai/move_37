@@ -4,14 +4,24 @@ from multiagent.scenario import BaseScenario
 
 
 class Scenario(BaseScenario):
+    """This class accepts parameters"""
+    def __init__(self, num_good_agents=1, num_adversaries=1, collision_reward=500):
+        """Doc-string goes here"""
+        self.num_good_agents = num_good_agents
+        self.num_adversaries = num_adversaries
+        self.collison_reward = collision_reward
+
     def make_world(self):
+        """Doc-string goes here"""
         world = World()
+
         # set any world properties first
         world.dim_c = 2
-        num_good_agents = 2
-        num_adversaries = 1
+        num_good_agents = self.num_good_agents
+        num_adversaries = self.num_adversaries
         num_agents = num_adversaries + num_good_agents
         num_landmarks = 0
+
         # add agents
         world.agents = [Agent() for i in range(num_agents)]
         for i, agent in enumerate(world.agents):
@@ -21,8 +31,8 @@ class Scenario(BaseScenario):
             agent.adversary = True if i < num_adversaries else False
             agent.size = 0.075 if agent.adversary else 0.05
             agent.accel = 3.0 if agent.adversary else 4.0
-            #agent.accel = 20.0 if agent.adversary else 25.0
             agent.max_speed = 1.0 if agent.adversary else 1.3
+
         # add landmarks
         world.landmarks = [Landmark() for i in range(num_landmarks)]
         for i, landmark in enumerate(world.landmarks):
@@ -99,7 +109,7 @@ class Scenario(BaseScenario):
         if agent.collide:
             for a in adversaries:
                 if self.is_collision(a, agent):
-                    rew -= 100
+                    rew -= self.collison_reward
 
         # agents are penalized for exiting the screen, so that they can be
         # caught by the adversaries
@@ -132,7 +142,7 @@ class Scenario(BaseScenario):
             for ag in agents:
                 for adv in adversaries:
                     if self.is_collision(ag, adv):
-                        rew += 100
+                        rew += self.collison_reward
         return rew
 
     def observation(self, agent, world):
